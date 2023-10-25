@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,23 +109,30 @@ func (db *DB) List(prefix string) ([]string, error) {
 
 // Set sets the document for the given key.
 func (db *DB) Set(key string, doc any) error {
-	_, err := db.Update(key, func(_ any) (any, error) { return doc, nil })
+	return db.SetWithRetry(key, doc, 0)
+}
+
+// SetWithRetry sets the document for the given key, retrying the given number
+// of times if the key is concurrently modified.
+func (db *DB) SetWithRetry(key string, doc any, retries int) error {
+	_, err := db.Update(key, func(_ any) (any, error) { return doc, nil }, retries)
 	return err
 }
 
 // Delete deletes the document for the given key.
 func (db *DB) Delete(key string) error {
-	_, err := db.Update(key, func(_ any) (any, error) { return nil, nil })
+	_, err := db.Update(key, func(_ any) (any, error) { return nil, nil }, 0)
 	return err
 }
+
+// ErrConcurrentMod is returned by if the key is concurrently modified.
+var ErrConcurrentMod = errors.New("concurrent modification")
 
 // Update updates the document for the given key, using the given function to
 // apply the update. The function will be called with the current document for
 // the key, or nil if the key does not exist. If the function returns nil, the
 // key will be deleted.
-func (db *DB) Update(key string, apply func(existing any) (any, error)) (any, error) {
-
-	var errConcurrentMod = errors.New("concurrent modification")
+func (db *DB) Update(key string, apply func(existing any) (any, error), retries int) (any, error) {
 
 	do := func() (any, error) {
 		// Get the current doc for its version. Non-existent files will end with
@@ -179,17 +187,20 @@ func (db *DB) Update(key string, apply func(existing any) (any, error)) (any, er
 			}
 		}
 		if neww.version != old.version {
-			return nil, errConcurrentMod
+			return nil, ErrConcurrentMod
 		}
 
 		return newDoc, os.Rename(f.Name(), keyPath(db.root, key))
 	}
 
-	for {
+	for i := 0; retries < 0 || i < retries; i++ {
 		doc, err := do()
-		if err == nil || err != errConcurrentMod {
+		if err == nil || err != ErrConcurrentMod {
 			return doc, err
 		}
-		time.Sleep(100 * time.Millisecond)
+		rnd := rand.Intn(50) + 50
+		time.Sleep(time.Duration(rnd) * time.Millisecond)
 	}
+
+	return nil, ErrConcurrentMod
 }
