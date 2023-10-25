@@ -13,13 +13,13 @@ import (
 )
 
 // DB is a file-based database.
-type DB[D any] struct {
+type DB struct {
 	root string
 }
 
-type dbEntry[D any] struct {
+type dbEntry struct {
 	version int
-	doc     *D
+	doc     any
 }
 
 func keyPath(root string, key string) string {
@@ -40,7 +40,7 @@ func lockPath(root string, key string) string {
 }
 
 // Open opens/initializes a database at the given path.
-func Open[D any](root string) (*DB[D], error) {
+func Open(root string) (*DB, error) {
 
 	initPath := filepath.Join(root, ".filedb")
 
@@ -58,25 +58,25 @@ func Open[D any](root string) (*DB[D], error) {
 		}
 	}
 
-	return &DB[D]{root}, nil
+	return &DB{root}, nil
 }
 
-func (db *DB[D]) get(key string) (dbEntry[D], error) {
+func (db *DB) get(key string) (dbEntry, error) {
 	f, err := os.Open(keyPath(db.root, key))
 	if err != nil {
-		return dbEntry[D]{}, err
+		return dbEntry{}, err
 	}
 	defer f.Close()
 
-	var e dbEntry[D]
+	var e dbEntry
 	if err := json.NewDecoder(f).Decode(&e); err != nil {
-		return dbEntry[D]{}, err
+		return dbEntry{}, err
 	}
 	return e, nil
 }
 
 // Get returns the document for the given key, or nil if it does not exist.
-func (db *DB[D]) Get(key string) (*D, error) {
+func (db *DB) Get(key string) (any, error) {
 	e, err := db.get(key)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -88,7 +88,7 @@ func (db *DB[D]) Get(key string) (*D, error) {
 }
 
 // List returns the keys in the database that have the given prefix.
-func (db *DB[D]) List(prefix string) ([]string, error) {
+func (db *DB) List(prefix string) ([]string, error) {
 	// TODO add prefix santitization (no slashes before or after, no .., etc.)
 	ents, err := os.ReadDir(filepath.Join(db.root, filepath.ToSlash(prefix)))
 	if err != nil {
@@ -107,14 +107,14 @@ func (db *DB[D]) List(prefix string) ([]string, error) {
 }
 
 // Set sets the document for the given key.
-func (db *DB[D]) Set(key string, doc *D) error {
-	_, err := db.Update(key, func(_ *D) (*D, error) { return doc, nil })
+func (db *DB) Set(key string, doc any) error {
+	_, err := db.Update(key, func(_ any) (any, error) { return doc, nil })
 	return err
 }
 
 // Delete deletes the document for the given key.
-func (db *DB[D]) Delete(key string) error {
-	_, err := db.Update(key, func(_ *D) (*D, error) { return nil, nil })
+func (db *DB) Delete(key string) error {
+	_, err := db.Update(key, func(_ any) (any, error) { return nil, nil })
 	return err
 }
 
@@ -122,11 +122,11 @@ func (db *DB[D]) Delete(key string) error {
 // apply the update. The function will be called with the current document for
 // the key, or nil if the key does not exist. If the function returns nil, the
 // key will be deleted.
-func (db *DB[D]) Update(key string, apply func(existing *D) (*D, error)) (*D, error) {
+func (db *DB) Update(key string, apply func(existing any) (any, error)) (any, error) {
 
 	var errConcurrentMod = errors.New("concurrent modification")
 
-	do := func() (*D, error) {
+	do := func() (any, error) {
 		// Get the current doc for its version. Non-existent files will end with
 		// version 0.
 
@@ -157,7 +157,7 @@ func (db *DB[D]) Update(key string, apply func(existing *D) (*D, error)) (*D, er
 		defer f.Close()
 		defer os.Remove(f.Name())
 
-		if err := json.NewEncoder(f).Encode(dbEntry[D]{old.version + 1, newDoc}); err != nil {
+		if err := json.NewEncoder(f).Encode(dbEntry{old.version + 1, newDoc}); err != nil {
 			return nil, err
 		}
 		if err := f.Close(); err != nil {
